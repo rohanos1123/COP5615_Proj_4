@@ -98,6 +98,38 @@ get_posts_subreddit(RedditPID, SubredditName) ->
     end.
 
 
+join_subreddit(RedditPID, Token, SubredditName) -> 
+    RedditPID ! {join_subreddit, {Token, SubredditName}, self()}, 
+    receive 
+        {success} -> 
+            io:format("Client: Sucessfully joined subreddit ~n"); 
+        {failed} -> 
+            io:format("Client: Failed to join subreddit ~n")
+    end. 
+
+
+leave_subreddit(RedditPID, Token, SubredditName) -> 
+    RedditPID ! {join_subreddit, {Token, SubredditName}, self()}, 
+    receive 
+        {success} -> 
+            io:format("Client: Sucessfully left subreddit ~n"); 
+        {failed} -> 
+            io:format("Client: Failed to leave subreddit ~n")
+    end. 
+
+get_feed(RedditPID, Token) -> 
+    RedditPID ! {get_feed, {Token}, self()}, 
+    receive 
+        {success, Feed} ->
+            io:format("Client: Successfuly received Feed. ~n"), 
+            Feed; 
+        {failed} -> 
+            io:format("Client: Failed to get feed. ~n")
+    end. 
+
+
+
+
 get_comments(RedditPID, ParentID) -> 
     RedditPID ! {get_comments, ParentID}, 
     receive 

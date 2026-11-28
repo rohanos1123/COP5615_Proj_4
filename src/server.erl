@@ -104,9 +104,9 @@ create_subreddit(Username, SubredditName, SubredditDescription) ->
 
 % Create Posts: 
 update_feeds(SubredditName, PostID) ->  
-    Followers = ets:lookup(subscriptions, SubredditName), 
+    Followers = ets:match_object(subscriptions, {'_', SubredditName, '_'}), 
     lists:foreach(
-        fun({_, Username}) -> 
+        fun({_, _, Username}) -> 
             userops:add_post_id_to_feed(Username, PostID)
         end, Followers). 
 
@@ -146,7 +146,7 @@ edit_post_likes(posts, ObjID, Mode, Username) ->
                     % Check if user has liked post or not
                     Res = ets:match_object(likes, {'_', ObjID, Username, '_'}), 
                     case Res of 
-                        [{LikeID, ObjectID, Username, Mode}] -> 
+                        [{LikeID, ObjID, Username, Mode}] -> 
                             case Mode of 
                                 upvote -> 
                                     % Cannot upvote an item twice
@@ -388,7 +388,7 @@ listen() ->
                 false -> 
                     ClientPID ! {failed}; 
                 _ -> 
-                    get_feed_unpacked(Username)
+                    ClientPID ! get_feed_unpacked(Username)
             end
     end. 
 
