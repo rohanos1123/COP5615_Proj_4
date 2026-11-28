@@ -71,9 +71,9 @@ upvote(RedditPID, Token, ObjectID) ->
     RedditPID ! {upvote, {Token, ObjectID}, self()},
     receive 
         {success} -> 
-            io:format("Client: Upvote Successful");
+            io:format("Client: Upvote Successful ~n");
         {failed} -> 
-            io:format("Client: Upvote Failed")
+            io:format("Client: Upvote Failed ~n")
     end. 
 
 
@@ -81,9 +81,9 @@ downvote(RedditPID, Token, ObjectID) ->
     RedditPID ! {downvote, {Token, ObjectID}, self()},
     receive 
         {success} -> 
-            io:format("Client: Downvote Successful");
+            io:format("Client: Downvote Successful~n");
         {failed} -> 
-            io:format("Client: Downvote Failed")
+            io:format("Client: Downvote Failed~n")
     end.  
 
 
@@ -97,6 +97,14 @@ get_posts_subreddit(RedditPID, SubredditName) ->
             io:format("Client: Post GET Failed ~n")
     end.
 
+
+get_comments(RedditPID, ParentID) -> 
+    RedditPID ! {get_comments, ParentID}, 
+    receive 
+        {success, CommentList} -> 
+            io:format("Client: Comment Get Successful ~n"),
+            CommentList
+    end. 
 
 
 

@@ -1,6 +1,7 @@
 -module(userops).
 -compile(export_all).
 -compile(nowarn_export_all). 
+-define(MAX_FEED_LENGTH, 10). 
 
 
 add_karma_to_user(Username, AddKarma) -> 
@@ -9,23 +10,51 @@ add_karma_to_user(Username, AddKarma) ->
     ets:insert(user_info, {User, Karma + AddKarma, A, B, C, D}). 
 
 
-add_subreddit_to_user(Username, NewSubreddit) -> 
+add_post_id_to_feed(Username, NewPostID) -> 
     Ans = ets:lookup(user_info, Username),
     case Ans of 
-        {User, Karma, SubredditIDs, MessageIDs, CommentIDs, PostsIDs} -> 
-            ets:insert(user_info,  {User, Karma, [NewSubreddit | SubredditIDs], MessageIDs, CommentIDs, PostsIDs}), 
+        {Username, Karma, Feed, ChatID, CommentID, PostID}->
+            case length(Feed) >  ?MAX_FEED_LENGTH of
+                true -> 
+                    [Head | _] = Feed, 
+                    NewFeed = Head; 
+                false -> 
+                    NewFeed = Feed
+            end, 
+            FinFeed = [NewPostID | NewFeed], 
+            ets:insert(user_info, {Username, Karma, FinFeed, ChatID, CommentID, PostID}), 
             true; 
-        _ -> 
+        false -> 
             false
     end. 
 
 
-remove_subreddit_from_user(Username, RemoveSubreddit) -> 
-    Ans = ets:lookup(user_info, Username),
+
+
+add_subreddit_to_user(Username, Subreddit) -> 
+    Ans = ets:member(user_info, Username),
     case Ans of 
-        {User, Karma, SubredditIDs, MessageIDs, CommentIDs, PostsIDs} -> 
-            FilteredList = lists:filter(fun(X) -> X =/= RemoveSubreddit end, SubredditIDs), 
-            ets:insert(user_info, {User, Karma, FilteredList, MessageIDs, CommentIDs, PostsIDs}), 
+        true->
+            SubRecord = ets:match_object(subscriptions, {'_', Subreddit, Username}), 
+            case SubRecord of 
+                [] -> 
+                    SubscriptionID = server:get_new_id(), 
+                    ets:insert(subscriptions, {SubscriptionID, Subreddit, Username}), 
+                    true; 
+                _ -> 
+                    % Cannot subcribe to a subreddit twice
+                    false
+            end;  
+        false -> 
+            false
+    end. 
+
+
+remove_subreddit_from_user(Username, Subreddit) -> 
+    Ans = ets:member(user_info, Username),
+    case Ans of 
+        true -> 
+            ets:delete_object(subscriptions, {'_', Subreddit, Username}),
             true; 
         _ -> 
             false

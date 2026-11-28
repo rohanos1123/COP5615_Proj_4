@@ -3,11 +3,14 @@
 -compile(nowarn_export_all). 
 
 % user_auth: {Username, Password}
-% user_info: {Username, Karma, SubredditIDs, ChatIDs, CommentIDs, PostsIDs}
+% user_info: {Username, Karma, Feed, ChatIDs, CommentIDs, PostsIDs}
 % subreddits: {SubredditName, Description, Owner, Members, CreationDate}
 % posts: {PostID, Subreddit, Owner, Title, Content, Likes, Dislikes, CreationDate}
+% likes: {LikeID, ObjID, Subreddit, Mode}
 % Comments: {CommentID, Owner, ParentID, Content, Likes, Dislike, CreateionDate} (For replies and top-level comments)
 % Sessions: {SessionID, Username}
+% direct_msg: {MsgID, ChatID, Sender, Recipient, Content, CreationDate}
+% subscriptions : {SubcriptionID, SubredditName, Username}
 
 % Note on Comments: If isReply is true, then the ObjectID refers to a comment, otherwise ObjectID refers to a post
 % comments: {CommentID, Owner, Content, Likes, isReply, ObjectID}
@@ -100,6 +103,14 @@ create_subreddit(Username, SubredditName, SubredditDescription) ->
 
 
 % Create Posts: 
+update_feeds(SubredditName, PostID) ->  
+    Followers = ets:lookup(subscriptions, SubredditName), 
+    lists:foreach(
+        fun({_, Username}) -> 
+            userops:add_post_id_to_feed(Username, PostID)
+        end, Followers). 
+
+
 create_post(Username, SubredditName, PostTitle, Content) -> 
     Ans = ets:lookup(subreddits, SubredditName), 
     case length(Ans) of 
@@ -110,6 +121,7 @@ create_post(Username, SubredditName, PostTitle, Content) ->
             ets:insert(posts, {NewPostID, SubredditName, Username, PostTitle, Content, 0, 0, get_current_date()}), 
             userops:add_karma_to_user(Username, 5), 
             userops:add_written_posts(Username, NewPostID), 
+            update_feeds(SubredditName, NewPostID), 
             true
     end. 
 
@@ -125,24 +137,62 @@ create_comment(Username, ParentID, Content) ->
 % Comments: {CommentID, Owner, ParentID, Content, Likes, Dislike, CreateionDate}
 
 % Mode can be Like or Dislike
-edit_post_likes(posts, ObjID, Mode) -> 
-    Search = ets:lookup(posts, {ObjID}), 
+edit_post_likes(posts, ObjID, Mode, Username) -> 
+    Search = ets:lookup(posts, ObjID), 
     case Search of 
         [{ObjID, Subreddit, Owner, Title, Content, Likes, Dislikes, CreationDate}] -> 
             case Mode of 
                 upvote -> 
-                    ets:insert(posts, {ObjID, Subreddit, Owner, Title, Content, Likes + 1, Dislikes, CreationDate}),
+                    % Check if user has liked post or not
+                    Res = ets:match_object(likes, {'_', ObjID, Username, '_'}), 
+                    case Res of 
+                        [{LikeID, ObjectID, Username, Mode}] -> 
+                            case Mode of 
+                                upvote -> 
+                                    % Cannot upvote an item twice
+                                    false; 
+                                downvote ->
+                                    ets:insert(likes, {LikeID, ObjID, Username, upvote}), 
+                                    ets:insert(posts, {ObjID, Subreddit, Owner, Title, Content, Likes + 1, Dislikes - 1, CreationDate}), 
+                                    true
+                            end; 
+                        _ -> 
+                            ets:insert(posts, {ObjID, Subreddit, Owner, Title, Content, Likes + 1, Dislikes, CreationDate}),
+                            LikeID = get_new_id(), 
+                            ets:insert(likes, {LikeID, ObjID, Username, upvote})
+                    end, 
                     userops:add_karma_to_user(Owner, 1); 
                 downvote -> 
-                    ets:insert(posts, {ObjID, Subreddit, Owner, Title, Content, Likes, Dislikes + 1, CreationDate}), 
+                    % 
+                    Res = ets:match_object(likes, {'_', ObjID, Username, '_'}), 
+                    case Res of 
+                        [{LikeID, ObjectID, Username, Mode}] -> 
+                            case Mode of 
+                                upvote -> 
+                                    % Disliking a previously liked post
+                                    ets:insert(likes, {LikeID, ObjectID, Username, downvote}), 
+                                    ets:insert(posts, {ObjID, Subreddit, Owner, Title, Content, Likes - 1, Dislikes + 1, CreationDate}),
+                                    true; 
+                                downvote -> 
+                                    % Cannot dislike a post twice
+                                    false 
+                            end; 
+                        _ -> 
+                            ets:insert(posts, {ObjID, Subreddit, Owner, Title, Content, Likes, Dislikes + 1, CreationDate}),
+                            LikeID = get_new_id(), 
+                            ets:insert(likes, {LikeID, ObjID, Username, downvote})
+
+                    end,     
                     userops:add_karma_to_user(Owner, -1)
             end,
             true;
         _ -> 
             false 
-    end;
+    end.
+
+
 edit_post_likes(comments, ObjID, Mode) -> 
-    Search = ets:lookup(comments, {ObjID}), 
+    Search = ets:lookup(comments, ObjID), 
     case Search of 
         [{CommentID, Owner, ParentID, Content, Likes, Dislikes, CreationDate}] -> 
             case Mode of 
@@ -183,6 +233,16 @@ downvote_item(ObjectID) ->
     Type = get_type(ObjectID), 
     edit_post_likes(Type, ObjectID, downvote). 
 
+
+get_feed_unpacked(Username) ->
+    Ans = ets:lookup(user_info, Username),
+    case Ans of
+        [{_, _, Feed, _, _, _}] -> 
+            UnpackedPosts = [lists:nth(1, ets:lookup(posts, PostID)) || PostID <- Feed],
+            {success, UnpackedPosts}; 
+        _ -> 
+            {failed} 
+    end. 
 
 
 init(Tables) -> 
@@ -303,7 +363,33 @@ listen() ->
         {get_comments, {ParentID}, ClientPID} -> 
             CommentList = get_comments(ParentID), 
             ClientPID ! {success, CommentList}, 
-            listen()
+            listen();
+        {join_subreddit, {Token, SubredditName}, ClientPID} -> 
+                Username = get_username(Token), 
+                case Username of 
+                    false -> 
+                        ClientPID ! {failed};
+                    _ -> 
+                        userops:add_subreddit_to_user(Username, SubredditName), 
+                        ClientPID ! {success}
+                end;
+        {leave_subreddit, {Token, SubredditName}, ClientPID} -> 
+                Username = get_username(Token), 
+                case Username of 
+                    false -> 
+                        ClientPID ! {failed}; 
+                    _  -> 
+                        userops:remove_subreddit_from_user(Username, SubredditName),
+                        ClientPID ! {success}
+                end; 
+        {get_feed, {Token}, ClientPID} -> 
+            Username = get_username(Token), 
+            case Username of 
+                false -> 
+                    ClientPID ! {failed}; 
+                _ -> 
+                    get_feed_unpacked(Username)
+            end
     end. 
 
 
@@ -325,7 +411,7 @@ create_tables(Tables) ->
     
 
 start() -> 
-    Tables = [user_auth, user_info, subreddits, posts, comments, session], 
+    Tables = [user_auth, user_info, subreddits, posts, likes, comments, session, direct_msg, subscriptions], 
     spawn(server, init, [Tables]). 
 
     
